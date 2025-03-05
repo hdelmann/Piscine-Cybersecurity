@@ -1,0 +1,150 @@
+#!/bin/bash
+
+is_number() {
+    [[ $1 =~ ^[0-9]+$ ]]
+}
+
+DOSSIER=".data"
+LVL=1
+i=1
+RECURSIV=0
+j=0
+
+for arg in "$@"; do
+    if [ "$arg" = "-r" ]; then
+        RECURSIV=1
+        LVL=5
+    fi
+    
+    if [ "$arg" = "-l" ] && [ $RECURSIV -eq 1 ]; then
+        if [ $((i + 2)) -le $# ] && is_number "${@:$i+1:1}" ; then
+            LVL="${@:$i+1:1}"
+        else
+            LVL=5
+        fi
+
+    fi
+    if [ "$arg" = "-p" ]; then
+            if [ $((i + 1)) -le $# ] && [ "${@:$i+1:1}" ]; then
+                DOSSIER="${@:$i+1:1}"
+            fi
+    fi
+    ((i++))
+done
+
+
+python3 -c "
+import requests
+from bs4 import BeautifulSoup
+import time
+import sys
+import os
+from urllib.parse import urljoin
+import re
+
+def clean_image_url(url):
+    match = re.search(r'(.*\.(?:jpg|jpeg|png|gif|bmp))', url, re.IGNORECASE)
+    return match.group(1) if match else url
+
+av1 = '${@:$#}'  
+max_depth = $LVL
+dir = '$DOSSIER'
+
+def extract_link(url):
+    try:
+        pagehtml = requests.get(url)
+        pagehtml.raise_for_status()
+    except requests.RequestException:
+        print(f'Request error : {url}')
+        return set()
+
+    page = BeautifulSoup(pagehtml.text, 'html.parser')
+    links = set()
+
+    for anchor in page.find_all('a', href=True):
+        link = anchor['href']
+        if link.startswith('http'):
+            links.add(link)
+        elif link.startswith('/'):
+            links.add(urljoin(url, link)) 
+
+    return links
+
+
+def recursive_extract_link(url, depth=1, max_depth=1, visited=None):
+    if visited is None:
+        visited = set()
+
+    if depth > max_depth:
+        return visited
+
+    visited.add(url)
+    print(f'[{depth}/{max_depth}] Exploration : {url}')
+
+    links = extract_link(url)
+
+    for link in links:
+        if link not in visited:
+            recursive_extract_link(link, depth + 1, max_depth, visited)
+
+    return visited
+
+
+def get_images(links):
+    
+    os.makedirs(dir, exist_ok=True)
+    allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+
+    for link in links:
+        link_image_test = clean_image_url(link)
+        if any(link_image_test.lower().endswith(ext) for ext in allowed_extensions):
+            filename = os.path.join(dir, link_image_test.split('/')[-1])
+            try:
+                response = requests.get(link_image_test, stream=True, timeout=5)
+                response.raise_for_status()
+                with open(filename, 'wb') as f:
+                    for chunk in response.iter_content(1024):
+                        f.write(chunk)
+                print(f'Download : {filename}')
+            except requests.RequestException:
+                print(f'Download impossible : {filename}')
+            continue
+        print(f'Image extraction of : {link}')
+        try:
+            response = requests.get(link, timeout=5)
+            response.raise_for_status()
+        except requests.RequestException:
+            print(f\"access error\")
+            continue
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        images = soup.find_all('img')
+        for img in images:
+            img_url = img.get('src')
+            print(img_url)
+            img_url = clean_image_url(img_url)
+            if not img_url:
+                continue
+
+            img_url = urljoin(link, img_url)
+            if not any(img_url.lower().endswith(ext) for ext in allowed_extensions):
+                continue
+            filename = os.path.join(dir, img_url.split('/')[-1])
+
+            try:
+                img_data = requests.get(img_url, stream=True, timeout=5)
+                img_data.raise_for_status()
+                with open(filename, 'wb') as f:
+                    for chunk in img_data.iter_content(1024):
+                        f.write(chunk)
+                print(f'Download : {filename}')
+            except requests.RequestException:
+                print(f'Download impossible ({img_data.status_code}) : {img_url}')
+
+
+all_links = recursive_extract_link(av1, max_depth=max_depth)
+
+get_images(all_links)
+
+print(f'\nExploration finish')
+"

@@ -1,0 +1,116 @@
+#!/bin/bash
+
+here=$(pwd)
+
+
+
+for arg in "$@"; do
+
+echo "----------------------------------------------------------------------------------------------------------------------------------"
+echo "              Metadata for image : ${arg##*/}"
+echo "----------------------------------------------------------------------------------------------------------------------------------"
+
+echo "File Name                       : ${arg##*/}"
+Directory=$(dirname $(readlink -f $arg))
+if [ ${Directory##*/} = ${here##*/} ]; then
+    Directory="."
+fi 
+echo "Directory                       : ${Directory##*/}"
+Kb="$(stat $arg | grep "Size" | cut -d ':' -f2-)"
+Kb="$(echo $Kb | cut -d ' ' -f1)"
+Kb="$(echo $Kb | awk '{printf "%.2f Kb\n", $1/1024}')"
+echo "File size                       : $Kb"
+Access="$(stat $arg | grep "Access:" | sed -n '2p' | cut -d ':' -f2-)"
+Modify="$(stat $arg | grep "Modify:" | cut -d ':' -f2-)"
+Change="$(stat $arg | grep "Change:" | cut -d ':' -f2-)"
+echo "File Modification Date/Time     :$Modify"
+echo "File Access Date/Time           :$Access"
+echo "File Inode Change Date/Time     :$Change"
+Perm="$(ls -la $Directory | grep ${arg##*/} | cut -d ' ' -f1)"
+echo "File Permissions                : $Perm"
+Type="$(file -k -b $arg | cut -d ' ' -f1)"
+echo "File Type                       : $Type"
+MIMEtype="$(file -i $arg | cut -d ' ' -f2 | cut -d ';' -f1)"
+echo "MIME Type                       : $MIMEtype"
+Title="$(strings $arg | grep -oP '"wgTitle":"\K[^"]+')"
+echo "Title                           : $Title"
+Generator="$(strings $arg | grep -oP '<meta name="generator" content="\K[^"]+')"
+echo "Generator                       : $Generator"
+Description="$(grep -oP '<meta name="description" content="\K[^"]+' $arg)"
+echo "Description                     : $Description"
+MODE=$(python3 -c "
+from PIL import Image
+try:
+    image = Image.open('$arg')
+    print(image.mode)
+except Exception as e:
+    print('Cannot identify image mode')
+"
+)
+echo "MODE                            : $MODE"
+WIDTH=$(python3 -c "
+from PIL import Image
+
+try:
+    image = Image.open('$arg')
+
+    width, height = image.size
+
+    print(f'{width} pixels\n')
+except Exception as e:
+    print('Cannot identify image')
+"
+)
+echo "WIDTH                           : $WIDTH"
+HEIGHT=$(python3 -c "
+from PIL import Image
+
+try:
+    image = Image.open('$arg')
+
+    width, height = image.size
+
+    print(f'{height} pixels\n')
+except Exception as e:
+    print('Cannot identify image')
+"
+)
+echo "HEIGHT                          : $HEIGHT"
+METADATA=$(python3 -c "
+from PIL import Image
+from PIL.ExifTags import TAGS
+import sys
+
+image_path = '$arg'
+
+try:
+    image = Image.open(image_path)
+
+    exif_data = image._getexif()
+
+    metadata_output = '----------------------------------------------------------------------------------------------------------------------------------\n'
+    metadata_output += f'                                                   Other Meta Data\n'
+    metadata_output += '----------------------------------------------------------------------------------------------------------------------------------\n'
+
+    if exif_data is not None:
+        for tag, value in exif_data.items():
+            tag_name = TAGS.get(tag, tag) 
+            try:
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8', errors='ignore')
+                
+                metadata_output += f'{tag_name:30}: {value}\n'
+            except (UnicodeDecodeError, TypeError):
+                metadata_output += f'{tag_name:30}: <Valeur non lisible>\n'
+
+    metadata_output += '----------------------------------------------------------------------------------------------------------------------------------\n'
+    print(metadata_output)
+
+except Exception as e:
+    print(f'No other meta data avaible')
+"
+)
+echo -e "$METADATA"
+
+
+done
